@@ -1,3 +1,3 @@
-# sox-recorder
+# Soxx Recorder
 
-A new project created with Intent by Augment.
+A raycast extension that captures audio from multiple sources with `sox` and performs transcription using `whisper-cli`.
