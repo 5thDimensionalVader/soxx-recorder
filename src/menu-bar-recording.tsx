@@ -11,6 +11,7 @@ import {
   transcribeRecording,
   deleteTranscript,
   openTranscriptInTextEdit,
+  copyTranscriptToClipboard
 } from "./utils/scripts";
 
 export default function Command() {
@@ -23,7 +24,8 @@ export default function Command() {
   const loadFiles = useCallback(async () => {
     setIsLoading(true);
     try {
-      const recordings = await listRecordings();
+      let recordings = await listRecordings();
+      recordings = recordings.filter((recording) => recording.createdAt.getDate() > new Date().getDate() - 7);
       setFiles(recordings);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -56,7 +58,7 @@ export default function Command() {
   );
 
   async function handleStart() {
-    const path = `${preferences.recordingsDirectory}/recording_${format(new Date(), "yyyy-MM-dd_HH-mm-ss")}.mp3`;
+    const path = `${preferences.recordingsDirectory}/recording_${format(new Date(), "yyyy-MM-dd")}.mp3`;
     const pid = await startRecording(path);
     setPid(pid);
     setIsRecording(true);
@@ -162,6 +164,22 @@ export default function Command() {
     }
   }
 
+  async function handleCopyTranscript(file: RecordingFile) {
+    try {
+      await copyTranscriptToClipboard(file.title);
+      await showToast({
+        style: Toast.Style.Success,
+        title: "Transcription copied to clipboard",
+      });
+    } catch (error) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to copy transcription",
+        message: String(error),
+      });
+    }
+  }
+
   return (
     <MenuBarExtra icon={isRecording ? Icon.Stop : Icon.Play} tooltip="Sox Recorder" isLoading={isLoading}>
       <MenuBarExtra.Section>
@@ -203,6 +221,13 @@ export default function Command() {
                   title="Delete Transcription"
                   icon={Icon.QuoteBlock}
                   onAction={() => handleDeleteTranscript(file)}
+                />
+              ) : null}
+              {file.hasTranscript ? (
+                <MenuBarExtra.Item
+                  title="Copy Transcription to Clipboard"
+                  icon={Icon.Clipboard}
+                  onAction={() => handleCopyTranscript(file)}
                 />
               ) : null}
               <MenuBarExtra.Item

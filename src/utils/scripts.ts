@@ -142,7 +142,7 @@ export async function transcribeRecording(recordingPath: string): Promise<Record
 
 export async function getTranscript(filename: string): Promise<RecordingTranscript | null> {
   try {
-    const data = await LocalStorage.getItem<string>(`${TRANSCRIPT_KEY_PREFIX}${filename}`);
+  const data = await LocalStorage.getItem<string>(`${TRANSCRIPT_KEY_PREFIX}${filename}`);
     if (data) {
       return JSON.parse(data) as RecordingTranscript;
     }
@@ -169,6 +169,17 @@ export async function openTranscriptInTextEdit(filename: string): Promise<void> 
     await execAsync(command, shellOptions);
   } catch (error) {
     throw new Error(`Failed to open transcript in TextEdit: ${error}`);
+  }
+}
+
+export async function copyTranscriptToClipboard(filename: string): Promise<void> {
+  const transcriptData = await getTranscript(filename);
+  if (!transcriptData) throw new Error("Transcript not found");
+  const command = `echo '${escapeForSingleQuotes(transcriptData.transcript)}' | pbcopy`
+  try {
+    await execAsync(command, shellOptions);
+  } catch (error) {
+     throw new Error(`Failed to copy transcript to clipboard: ${error}`);
   }
 }
 
