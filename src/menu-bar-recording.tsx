@@ -1,7 +1,7 @@
 import { MenuBarExtra, Icon, getPreferenceValues, showToast, Toast, confirmAlert, Alert, open } from "@raycast/api";
 import { useCachedState } from "@raycast/utils";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { format } from "date-fns";
+import { format, subDays } from "date-fns";
 import fs from "node:fs";
 import {
   startRecording,
@@ -13,7 +13,7 @@ import {
   deleteRecordingMetadata,
   openTranscriptInTextEdit,
   copyTranscriptToClipboard,
-  updateRecordingPin
+  updateRecordingPin,
 } from "./utils/scripts";
 
 export default function Command() {
@@ -27,7 +27,8 @@ export default function Command() {
     setIsLoading(true);
     try {
       let recordings = await listRecordings();
-      recordings = recordings.filter((recording) => recording.createdAt.getDate() > new Date().getDate() - 7);
+      const cutoffDate = subDays(new Date(), 7);
+      recordings = recordings.filter((recording) => recording.createdAt >= cutoffDate);
       setFiles(recordings);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
