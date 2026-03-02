@@ -13,9 +13,11 @@ import { useState, useEffect, useCallback } from "react";
 import fs from "fs";
 import {
   deleteTranscript,
+  deleteRecordingMetadata,
   listRecordings,
   openTranscriptInTextEdit,
   transcribeRecording,
+  updateRecordingPin,
   RecordingFile,
 } from "./utils/scripts";
 import { isToday, isYesterday, format } from "date-fns";
@@ -30,7 +32,12 @@ function getDateGroup(date: Date): DateGroup {
 
 function groupAndSortRecordings(files: RecordingFile[]): Record<DateGroup, RecordingFile[]> {
   // Sort by date descending (most recent first)
-  const sorted = [...files].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const sorted = [...files].sort((a, b) => {
+    if (a.isPinned !== b.isPinned) {
+      return a.isPinned ? -1 : 1;
+    }
+    return b.createdAt.getTime() - a.createdAt.getTime();
+  });
 
   const groups: Record<DateGroup, RecordingFile[]> = {
     Today: [],
@@ -91,6 +98,7 @@ export default function Command() {
         await fs.promises.unlink(file.path);
         // Delete transcript from LocalStorage if it exists
         await deleteTranscript(file.title);
+        await deleteRecordingMetadata(file.title);
         await showToast({
           style: Toast.Style.Success,
           title: "Recording deleted",
@@ -161,6 +169,24 @@ export default function Command() {
     }
   }
 
+  async function handleTogglePin(file: RecordingFile) {
+    const nextPinned = !file.isPinned;
+    try {
+      await updateRecordingPin(file, nextPinned);
+      await showToast({
+        style: Toast.Style.Success,
+        title: nextPinned ? "Recording pinned" : "Recording unpinned",
+      });
+      await loadFiles();
+    } catch (error) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to update pin",
+        message: String(error),
+      });
+    }
+  }
+
   const groupedFiles = groupAndSortRecordings(files);
   const dateGroups: DateGroup[] = ["Today", "Yesterday", "Older"];
 
@@ -178,6 +204,9 @@ export default function Command() {
                 title={file.title}
                 icon={{ fileIcon: file.path }}
                 accessories={[
+                  ...(file.isPinned
+                    ? [{ icon: { source: Icon.Pin, tintColor: Color.Orange }, tooltip: "Pinned" }]
+                    : []),
                   ...(file.hasTranscript
                     ? [{ icon: { source: Icon.QuoteBlock, tintColor: Color.Blue }, tooltip: "Transcript available" }]
                     : []),
@@ -189,6 +218,12 @@ export default function Command() {
                     <ActionPanel.Section>
                       <Action.Open title="Open Recording" target={file.path} />
                       <Action.ToggleQuickLook />
+                      <Action
+                        title={file.isPinned ? "Unpin Recording" : "Pin Recording"}
+                        icon={Icon.Pin}
+                        shortcut={{ modifiers: ["ctrl"], key: "p" }}
+                        onAction={() => handleTogglePin(file)}
+                      />
                     </ActionPanel.Section>
                     <ActionPanel.Section>
                       {file.hasTranscript ? (

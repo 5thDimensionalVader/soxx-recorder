@@ -10,8 +10,10 @@ import {
   RecordingFile,
   transcribeRecording,
   deleteTranscript,
+  deleteRecordingMetadata,
   openTranscriptInTextEdit,
-  copyTranscriptToClipboard
+  copyTranscriptToClipboard,
+  updateRecordingPin
 } from "./utils/scripts";
 
 export default function Command() {
@@ -53,7 +55,13 @@ export default function Command() {
   }, [loadFiles]);
 
   const sortedFiles = useMemo(
-    () => [...files].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+    () =>
+      [...files].sort((a, b) => {
+        if (a.isPinned !== b.isPinned) {
+          return a.isPinned ? -1 : 1;
+        }
+        return b.createdAt.getTime() - a.createdAt.getTime();
+      }),
     [files],
   );
 
@@ -95,6 +103,7 @@ export default function Command() {
       try {
         await fs.promises.unlink(file.path);
         await deleteTranscript(file.title);
+        await deleteRecordingMetadata(file.title);
         await showToast({
           style: Toast.Style.Success,
           title: "Recording deleted",
@@ -180,6 +189,24 @@ export default function Command() {
     }
   }
 
+  async function handleTogglePin(file: RecordingFile) {
+    const nextPinned = !file.isPinned;
+    try {
+      await updateRecordingPin(file, nextPinned);
+      await showToast({
+        style: Toast.Style.Success,
+        title: nextPinned ? "Recording pinned" : "Recording unpinned",
+      });
+      await loadFiles();
+    } catch (error) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to update pin",
+        message: String(error),
+      });
+    }
+  }
+
   return (
     <MenuBarExtra icon={isRecording ? Icon.Stop : Icon.Play} tooltip="Sox Recorder" isLoading={isLoading}>
       <MenuBarExtra.Section>
@@ -196,6 +223,11 @@ export default function Command() {
           sortedFiles.map((file) => (
             <MenuBarExtra.Submenu key={file.path} title={file.title} icon={{ fileIcon: file.path }}>
               <MenuBarExtra.Item title="Open Recording" icon={Icon.Finder} onAction={() => open(file.path)} />
+              <MenuBarExtra.Item
+                title={file.isPinned ? "Unpin Recording" : "Pin Recording"}
+                icon={Icon.Pin}
+                onAction={() => handleTogglePin(file)}
+              />
               {file.hasTranscript ? (
                 <MenuBarExtra.Item
                   title="Open Transcription in TextEdit"
