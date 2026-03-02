@@ -32,12 +32,7 @@ function getDateGroup(date: Date): DateGroup {
 
 function groupAndSortRecordings(files: RecordingFile[]): Record<DateGroup, RecordingFile[]> {
   // Sort by date descending (most recent first)
-  const sorted = [...files].sort((a, b) => {
-    if (a.isPinned !== b.isPinned) {
-      return a.isPinned ? -1 : 1;
-    }
-    return b.createdAt.getTime() - a.createdAt.getTime();
-  });
+  const sorted = [...files].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
   const groups: Record<DateGroup, RecordingFile[]> = {
     Today: [],
@@ -187,11 +182,87 @@ export default function Command() {
     }
   }
 
-  const groupedFiles = groupAndSortRecordings(files);
+  const pinnedFiles = [...files.filter((file) => file.isPinned)].sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+  );
+  const unpinnedFiles = files.filter((file) => !file.isPinned);
+  const groupedFiles = groupAndSortRecordings(unpinnedFiles);
   const dateGroups: DateGroup[] = ["Today", "Yesterday", "Older"];
 
   return (
     <List navigationTitle="Saved Recordings">
+      {pinnedFiles.length > 0 ? (
+        <List.Section title="Pinned">
+          {pinnedFiles.map((file) => (
+            <List.Item
+              key={file.title}
+              title={file.title}
+              icon={{ fileIcon: file.path }}
+              accessories={[
+                ...(file.hasTranscript
+                  ? [{ icon: { source: Icon.QuoteBlock, tintColor: Color.Blue }, tooltip: "Transcript available" }]
+                  : []),
+                { text: format(file.createdAt, "MMM d, yyyy") },
+              ]}
+              quickLook={{ name: file.title, path: file.path }}
+              actions={
+                <ActionPanel>
+                  <ActionPanel.Section>
+                    <Action.Open title="Open Recording" target={file.path} />
+                    <Action.ToggleQuickLook />
+                    <Action
+                      title="Unpin Recording"
+                      icon={Icon.Pin}
+                      shortcut={{ modifiers: ["ctrl"], key: "p" }}
+                      onAction={() => handleTogglePin(file)}
+                    />
+                  </ActionPanel.Section>
+                  <ActionPanel.Section>
+                    {file.hasTranscript ? (
+                      <Action
+                        title="Open Transcription in TextEdit"
+                        icon={Icon.Text}
+                        shortcut={{ modifiers: ["cmd"], key: "o" }}
+                        onAction={() => handleOpenTranscript(file)}
+                      />
+                    ) : null}
+                    {file.hasTranscript ? (
+                      <Action
+                        title="Retranscribe Recording"
+                        icon={Icon.Wand}
+                        shortcut={{ modifiers: ["cmd"], key: "t" }}
+                        onAction={() => handleRetranscribe(file)}
+                      />
+                    ) : (
+                      <Action
+                        title="Transcribe Recording"
+                        icon={Icon.Wand}
+                        shortcut={{ modifiers: ["cmd"], key: "t" }}
+                        onAction={() => handleRetranscribe(file)}
+                      />
+                    )}
+                    {file.hasTranscript ? (
+                      <Action
+                        title="Delete Transcription"
+                        icon={Icon.QuoteBlock}
+                        shortcut={{ modifiers: ["ctrl"], key: "t" }}
+                        onAction={() => handleDeleteTranscript(file)}
+                      />
+                    ) : null}
+                    <Action
+                      title="Delete Recording"
+                      icon={Icon.Trash}
+                      style={Action.Style.Destructive}
+                      shortcut={{ modifiers: ["ctrl"], key: "x" }}
+                      onAction={() => handleDelete(file)}
+                    />
+                  </ActionPanel.Section>
+                </ActionPanel>
+              }
+            />
+          ))}
+        </List.Section>
+      ) : null}
       {dateGroups.map((group) => {
         const groupFiles = groupedFiles[group];
         if (groupFiles.length === 0) return null;
@@ -204,9 +275,6 @@ export default function Command() {
                 title={file.title}
                 icon={{ fileIcon: file.path }}
                 accessories={[
-                  ...(file.isPinned
-                    ? [{ icon: { source: Icon.Pin, tintColor: Color.Orange }, tooltip: "Pinned" }]
-                    : []),
                   ...(file.hasTranscript
                     ? [{ icon: { source: Icon.QuoteBlock, tintColor: Color.Blue }, tooltip: "Transcript available" }]
                     : []),
