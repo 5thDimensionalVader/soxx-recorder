@@ -26,9 +26,7 @@ export default function Command() {
   const loadFiles = useCallback(async () => {
     setIsLoading(true);
     try {
-      let recordings = await listRecordings();
-      const cutoffDate = subDays(new Date(), 7);
-      recordings = recordings.filter((recording) => recording.createdAt >= cutoffDate);
+      const recordings = await listRecordings();
       setFiles(recordings);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -56,8 +54,9 @@ export default function Command() {
   }, [loadFiles]);
 
   const { pinnedFiles, unpinnedFiles } = useMemo(() => {
+    const cutoffDate = subDays(new Date(), 7);
     const pinned = files.filter((file) => file.isPinned);
-    const unpinned = files.filter((file) => !file.isPinned);
+    const unpinned = files.filter((file) => !file.isPinned && file.createdAt >= cutoffDate);
     const sortByDate = (a: RecordingFile, b: RecordingFile) => b.createdAt.getTime() - a.createdAt.getTime();
     return {
       pinnedFiles: [...pinned].sort(sortByDate),
