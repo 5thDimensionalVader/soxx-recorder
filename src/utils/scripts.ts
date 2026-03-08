@@ -2,6 +2,7 @@ import { getPreferenceValues, LocalStorage } from "@raycast/api";
 import { exec, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export interface RecordingTranscript {
@@ -27,11 +28,23 @@ export interface RecordingMetadata {
   hasTranscript: boolean;
   isPinned: boolean;
 }
+
+interface RecordingTranscriptProgress {
+  filename: string;
+  transcript: string;
+  completedChunks: number;
+  totalChunks: number;
+  updatedAt: string;
+}
+
 const preferences = getPreferenceValues<Preferences & { fastTranscript?: boolean }>();
 const execAsync = promisify(exec);
 const shellOptions = { shell: "/bin/zsh" };
 const TRANSCRIPT_KEY_PREFIX = "recording_transcript_";
+const TEMP_TRANSCRIPT_KEY_PREFIX = "recording_transcript_tmp_";
 const METADATA_KEY_PREFIX = "recording_metadata_";
+const TRANSCRIPTION_CHUNK_SECONDS = 1800;
+const TRANSCRIPTION_TEMP_DIR_PREFIX = "sox-recorder-transcribe-";
 
 export async function checkCommand(command: string): Promise<string> {
   try {
@@ -150,40 +163,166 @@ export async function stopRecording(pid: string): Promise<void> {
   }
 }
 
-export async function transcribeRecording(recordingPath: string): Promise<RecordingTranscript> {
-  const whisperPath = await checkCommand("/opt/homebrew/bin/whisper-cli");
+function getTranscriptKey(filename: string): string {
+  return `${TRANSCRIPT_KEY_PREFIX}${filename}`;
+}
 
-  const modelPath = path.join(
+function getTempTranscriptKey(filename: string): string {
+  return `${TEMP_TRANSCRIPT_KEY_PREFIX}${filename}`;
+}
+
+function getWhisperModelPath(): string {
+  return path.join(
     process.env.HOME || "~",
     "models",
     preferences.fastTranscript ? "ggml-small.bin" : "ggml-medium.en.bin",
   );
-  const filename = path.basename(recordingPath);
+}
 
-  const command = `"${whisperPath}" -m "${modelPath}" -f "${recordingPath}" -l en -np -nt`;
+async function runCommand(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    child.on("error", (error) => {
+      reject(new Error(`Failed to run ${command}: ${error.message}`));
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+
+      const details = stderr.trim() || stdout.trim() || `Process exited with code ${code}`;
+      reject(new Error(details));
+    });
+  });
+}
+
+async function createTranscriptionTempDir(): Promise<string> {
+  return fs.promises.mkdtemp(path.join(os.tmpdir(), TRANSCRIPTION_TEMP_DIR_PREFIX));
+}
+
+async function cleanupTranscriptionTempDir(tempDir: string | null): Promise<void> {
+  if (!tempDir) return;
 
   try {
-    const { stdout } = await execAsync(command, {
-      ...shellOptions,
-    });
-    const transcript = stdout.trim();
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+  } catch (error) {
+    console.error(`Failed to clean up temporary transcription directory ${tempDir}:`, error);
+  }
+}
+
+async function segmentRecordingToWavChunks(recordingPath: string, tempDir: string): Promise<string[]> {
+  const ffmpegPath = await checkCommand("/opt/homebrew/bin/ffmpeg");
+  const chunkPattern = path.join(tempDir, "chunk_%03d.wav");
+
+  await runCommand(ffmpegPath, [
+    "-i",
+    recordingPath,
+    "-f",
+    "segment",
+    "-segment_time",
+    `${TRANSCRIPTION_CHUNK_SECONDS}`,
+    "-ar",
+    "16000",
+    "-ac",
+    "1",
+    "-c:a",
+    "pcm_s16le",
+    chunkPattern,
+  ]);
+
+  const entries = await fs.promises.readdir(tempDir);
+  const chunkPaths = entries
+    .filter((entry) => /^chunk_\d+\.wav$/.test(entry))
+    .sort((left, right) => left.localeCompare(right))
+    .map((entry) => path.join(tempDir, entry));
+
+  if (chunkPaths.length === 0) {
+    throw new Error("FFmpeg did not generate any transcription chunks");
+  }
+
+  return chunkPaths;
+}
+
+async function saveTranscriptProgress(progress: RecordingTranscriptProgress): Promise<void> {
+  await LocalStorage.setItem(getTempTranscriptKey(progress.filename), JSON.stringify(progress));
+}
+
+async function clearTranscriptProgress(filename: string): Promise<void> {
+  await LocalStorage.removeItem(getTempTranscriptKey(filename));
+}
+
+async function transcribeChunk(whisperPath: string, modelPath: string, chunkPath: string): Promise<string> {
+  const { stdout } = await runCommand(whisperPath, ["-m", modelPath, "-f", chunkPath, "-l", "en", "-np", "-nt"]);
+  return stdout.trim();
+}
+
+export async function transcribeRecording(recordingPath: string): Promise<RecordingTranscript> {
+  const whisperPath = await checkCommand("/opt/homebrew/bin/whisper-cli");
+  const modelPath = getWhisperModelPath();
+  const filename = path.basename(recordingPath);
+  let tempDir: string | null = null;
+
+  try {
+    tempDir = await createTranscriptionTempDir();
+    const chunkPaths = await segmentRecordingToWavChunks(recordingPath, tempDir);
+    const transcriptParts: string[] = [];
+
+    for (const [index, chunkPath] of chunkPaths.entries()) {
+      const chunkTranscript = await transcribeChunk(whisperPath, modelPath, chunkPath);
+
+      if (chunkTranscript) {
+        transcriptParts.push(chunkTranscript);
+      }
+
+      await saveTranscriptProgress({
+        filename,
+        transcript: transcriptParts.join("\n\n"),
+        completedChunks: index + 1,
+        totalChunks: chunkPaths.length,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
     const transcriptData: RecordingTranscript = {
       filename,
-      transcript,
+      transcript: transcriptParts.join("\n\n"),
       createdAt: new Date().toISOString(),
     };
 
-    await LocalStorage.setItem(`${TRANSCRIPT_KEY_PREFIX}${filename}`, JSON.stringify(transcriptData));
+    await LocalStorage.setItem(getTranscriptKey(filename), JSON.stringify(transcriptData));
+    await clearTranscriptProgress(filename);
 
     return transcriptData;
   } catch (error) {
     throw new Error(`Failed to transcribe recording: ${error}`);
+  } finally {
+    await clearTranscriptProgress(filename);
+    await cleanupTranscriptionTempDir(tempDir);
   }
 }
 
 export async function getTranscript(filename: string): Promise<RecordingTranscript | null> {
   try {
-    const data = await LocalStorage.getItem<string>(`${TRANSCRIPT_KEY_PREFIX}${filename}`);
+    const data = await LocalStorage.getItem<string>(getTranscriptKey(filename));
     if (data) {
       return JSON.parse(data) as RecordingTranscript;
     }
@@ -221,7 +360,7 @@ export async function updateRecordingPin(file: RecordingFile, isPinned: boolean)
 }
 
 function escapeForSingleQuotes(value: string): string {
-  return value.replace(/'/g, `'\"'\"'`);
+  return value.replace(/'/g, `'"'"'`);
 }
 
 export async function openTranscriptInTextEdit(filename: string): Promise<void> {
@@ -252,7 +391,8 @@ export async function copyTranscriptToClipboard(filename: string): Promise<void>
 }
 
 export async function deleteTranscript(filename: string): Promise<void> {
-  await LocalStorage.removeItem(`${TRANSCRIPT_KEY_PREFIX}${filename}`);
+  await LocalStorage.removeItem(getTranscriptKey(filename));
+  await clearTranscriptProgress(filename);
 }
 
 export async function deleteRecordingMetadata(filename: string): Promise<void> {
