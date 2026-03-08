@@ -13,9 +13,11 @@ import { useState, useEffect, useCallback } from "react";
 import fs from "fs";
 import {
   deleteTranscript,
+  deleteRecordingMetadata,
   listRecordings,
   openTranscriptInTextEdit,
   transcribeRecording,
+  updateRecordingPin,
   RecordingFile,
 } from "./utils/scripts";
 import { isToday, isYesterday, format } from "date-fns";
@@ -91,6 +93,7 @@ export default function Command() {
         await fs.promises.unlink(file.path);
         // Delete transcript from LocalStorage if it exists
         await deleteTranscript(file.title);
+        await deleteRecordingMetadata(file.title);
         await showToast({
           style: Toast.Style.Success,
           title: "Recording deleted",
@@ -161,11 +164,105 @@ export default function Command() {
     }
   }
 
-  const groupedFiles = groupAndSortRecordings(files);
+  async function handleTogglePin(file: RecordingFile) {
+    const nextPinned = !file.isPinned;
+    try {
+      await updateRecordingPin(file, nextPinned);
+      await showToast({
+        style: Toast.Style.Success,
+        title: nextPinned ? "Recording pinned" : "Recording unpinned",
+      });
+      await loadFiles();
+    } catch (error) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to update pin",
+        message: String(error),
+      });
+    }
+  }
+
+  const pinnedFiles = [...files.filter((file) => file.isPinned)].sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+  );
+  const unpinnedFiles = files.filter((file) => !file.isPinned);
+  const groupedFiles = groupAndSortRecordings(unpinnedFiles);
   const dateGroups: DateGroup[] = ["Today", "Yesterday", "Older"];
 
   return (
     <List navigationTitle="Saved Recordings">
+      {pinnedFiles.length > 0 ? (
+        <List.Section title="Pinned">
+          {pinnedFiles.map((file) => (
+            <List.Item
+              key={file.title}
+              title={file.title}
+              icon={{ fileIcon: file.path }}
+              accessories={[
+                ...(file.hasTranscript
+                  ? [{ icon: { source: Icon.QuoteBlock, tintColor: Color.Blue }, tooltip: "Transcript available" }]
+                  : []),
+                { text: format(file.createdAt, "MMM d, yyyy") },
+              ]}
+              quickLook={{ name: file.title, path: file.path }}
+              actions={
+                <ActionPanel>
+                  <ActionPanel.Section>
+                    <Action.Open title="Open Recording" target={file.path} />
+                    <Action.ToggleQuickLook />
+                    <Action
+                      title="Unpin Recording"
+                      icon={Icon.Pin}
+                      shortcut={{ modifiers: ["ctrl"], key: "p" }}
+                      onAction={() => handleTogglePin(file)}
+                    />
+                  </ActionPanel.Section>
+                  <ActionPanel.Section>
+                    {file.hasTranscript ? (
+                      <Action
+                        title="Open Transcription in TextEdit"
+                        icon={Icon.Text}
+                        shortcut={{ modifiers: ["cmd"], key: "o" }}
+                        onAction={() => handleOpenTranscript(file)}
+                      />
+                    ) : null}
+                    {file.hasTranscript ? (
+                      <Action
+                        title="Retranscribe Recording"
+                        icon={Icon.Wand}
+                        shortcut={{ modifiers: ["cmd"], key: "t" }}
+                        onAction={() => handleRetranscribe(file)}
+                      />
+                    ) : (
+                      <Action
+                        title="Transcribe Recording"
+                        icon={Icon.Wand}
+                        shortcut={{ modifiers: ["cmd"], key: "t" }}
+                        onAction={() => handleRetranscribe(file)}
+                      />
+                    )}
+                    {file.hasTranscript ? (
+                      <Action
+                        title="Delete Transcription"
+                        icon={Icon.QuoteBlock}
+                        shortcut={{ modifiers: ["ctrl"], key: "t" }}
+                        onAction={() => handleDeleteTranscript(file)}
+                      />
+                    ) : null}
+                    <Action
+                      title="Delete Recording"
+                      icon={Icon.Trash}
+                      style={Action.Style.Destructive}
+                      shortcut={{ modifiers: ["ctrl"], key: "x" }}
+                      onAction={() => handleDelete(file)}
+                    />
+                  </ActionPanel.Section>
+                </ActionPanel>
+              }
+            />
+          ))}
+        </List.Section>
+      ) : null}
       {dateGroups.map((group) => {
         const groupFiles = groupedFiles[group];
         if (groupFiles.length === 0) return null;
@@ -189,6 +286,12 @@ export default function Command() {
                     <ActionPanel.Section>
                       <Action.Open title="Open Recording" target={file.path} />
                       <Action.ToggleQuickLook />
+                      <Action
+                        title={file.isPinned ? "Unpin Recording" : "Pin Recording"}
+                        icon={Icon.Pin}
+                        shortcut={{ modifiers: ["ctrl"], key: "p" }}
+                        onAction={() => handleTogglePin(file)}
+                      />
                     </ActionPanel.Section>
                     <ActionPanel.Section>
                       {file.hasTranscript ? (

@@ -1,7 +1,7 @@
 import { MenuBarExtra, Icon, getPreferenceValues, showToast, Toast, confirmAlert, Alert, open } from "@raycast/api";
 import { useCachedState } from "@raycast/utils";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { format } from "date-fns";
+import { format, subDays } from "date-fns";
 import fs from "node:fs";
 import {
   startRecording,
@@ -10,8 +10,10 @@ import {
   RecordingFile,
   transcribeRecording,
   deleteTranscript,
+  deleteRecordingMetadata,
   openTranscriptInTextEdit,
-  copyTranscriptToClipboard
+  copyTranscriptToClipboard,
+  updateRecordingPin,
 } from "./utils/scripts";
 
 export default function Command() {
@@ -25,7 +27,8 @@ export default function Command() {
     setIsLoading(true);
     try {
       let recordings = await listRecordings();
-      recordings = recordings.filter((recording) => recording.createdAt.getDate() > new Date().getDate() - 7);
+      const cutoffDate = subDays(new Date(), 7);
+      recordings = recordings.filter((recording) => recording.createdAt >= cutoffDate);
       setFiles(recordings);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -52,10 +55,15 @@ export default function Command() {
     loadFiles();
   }, [loadFiles]);
 
-  const sortedFiles = useMemo(
-    () => [...files].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
-    [files],
-  );
+  const { pinnedFiles, unpinnedFiles } = useMemo(() => {
+    const pinned = files.filter((file) => file.isPinned);
+    const unpinned = files.filter((file) => !file.isPinned);
+    const sortByDate = (a: RecordingFile, b: RecordingFile) => b.createdAt.getTime() - a.createdAt.getTime();
+    return {
+      pinnedFiles: [...pinned].sort(sortByDate),
+      unpinnedFiles: [...unpinned].sort(sortByDate),
+    };
+  }, [files]);
 
   async function handleStart() {
     const path = `${preferences.recordingsDirectory}/recording_${format(new Date(), "yyyy-MM-dd")}.mp3`;
@@ -95,6 +103,7 @@ export default function Command() {
       try {
         await fs.promises.unlink(file.path);
         await deleteTranscript(file.title);
+        await deleteRecordingMetadata(file.title);
         await showToast({
           style: Toast.Style.Success,
           title: "Recording deleted",
@@ -180,6 +189,24 @@ export default function Command() {
     }
   }
 
+  async function handleTogglePin(file: RecordingFile) {
+    const nextPinned = !file.isPinned;
+    try {
+      await updateRecordingPin(file, nextPinned);
+      await showToast({
+        style: Toast.Style.Success,
+        title: nextPinned ? "Recording pinned" : "Recording unpinned",
+      });
+      await loadFiles();
+    } catch (error) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to update pin",
+        message: String(error),
+      });
+    }
+  }
+
   return (
     <MenuBarExtra icon={isRecording ? Icon.Stop : Icon.Play} tooltip="Sox Recorder" isLoading={isLoading}>
       <MenuBarExtra.Section>
@@ -189,56 +216,104 @@ export default function Command() {
           onAction={isRecording ? handleStop : handleStart}
         />
       </MenuBarExtra.Section>
-      <MenuBarExtra.Section title="Recordings">
-        {sortedFiles.length === 0 ? (
+      {pinnedFiles.length === 0 && unpinnedFiles.length === 0 ? (
+        <MenuBarExtra.Section title="Recordings">
           <MenuBarExtra.Item title="No recordings found" />
-        ) : (
-          sortedFiles.map((file) => (
-            <MenuBarExtra.Submenu key={file.path} title={file.title} icon={{ fileIcon: file.path }}>
-              <MenuBarExtra.Item title="Open Recording" icon={Icon.Finder} onAction={() => open(file.path)} />
-              {file.hasTranscript ? (
-                <MenuBarExtra.Item
-                  title="Open Transcription in TextEdit"
-                  icon={Icon.Text}
-                  onAction={() => handleOpenTranscript(file)}
-                />
-              ) : null}
-              {file.hasTranscript ? (
-                <MenuBarExtra.Item
-                  title="Retranscribe Recording"
-                  icon={Icon.Wand}
-                  onAction={() => handleRetranscribe(file)}
-                />
-              ) : (
-                <MenuBarExtra.Item
-                  title="Transcribe Recording"
-                  icon={Icon.Wand}
-                  onAction={() => handleRetranscribe(file)}
-                />
-              )}
-              {file.hasTranscript ? (
-                <MenuBarExtra.Item
-                  title="Delete Transcription"
-                  icon={Icon.QuoteBlock}
-                  onAction={() => handleDeleteTranscript(file)}
-                />
-              ) : null}
-              {file.hasTranscript ? (
-                <MenuBarExtra.Item
-                  title="Copy Transcription to Clipboard"
-                  icon={Icon.Clipboard}
-                  onAction={() => handleCopyTranscript(file)}
-                />
-              ) : null}
-              <MenuBarExtra.Item
-                title="Delete Recording"
-                icon={Icon.Trash}
-                onAction={() => handleDelete(file)}
-              />
-            </MenuBarExtra.Submenu>
-          ))
-        )}
-      </MenuBarExtra.Section>
+        </MenuBarExtra.Section>
+      ) : (
+        <>
+          {pinnedFiles.length > 0 ? (
+            <MenuBarExtra.Section title="Pinned">
+              {pinnedFiles.map((file) => (
+                <MenuBarExtra.Submenu key={file.path} title={file.title} icon={{ fileIcon: file.path }}>
+                  <MenuBarExtra.Item title="Open Recording" icon={Icon.Finder} onAction={() => open(file.path)} />
+                  <MenuBarExtra.Item title="Unpin Recording" icon={Icon.Pin} onAction={() => handleTogglePin(file)} />
+                  {file.hasTranscript ? (
+                    <MenuBarExtra.Item
+                      title="Open Transcription in TextEdit"
+                      icon={Icon.Text}
+                      onAction={() => handleOpenTranscript(file)}
+                    />
+                  ) : null}
+                  {file.hasTranscript ? (
+                    <MenuBarExtra.Item
+                      title="Retranscribe Recording"
+                      icon={Icon.Wand}
+                      onAction={() => handleRetranscribe(file)}
+                    />
+                  ) : (
+                    <MenuBarExtra.Item
+                      title="Transcribe Recording"
+                      icon={Icon.Wand}
+                      onAction={() => handleRetranscribe(file)}
+                    />
+                  )}
+                  {file.hasTranscript ? (
+                    <MenuBarExtra.Item
+                      title="Delete Transcription"
+                      icon={Icon.QuoteBlock}
+                      onAction={() => handleDeleteTranscript(file)}
+                    />
+                  ) : null}
+                  {file.hasTranscript ? (
+                    <MenuBarExtra.Item
+                      title="Copy Transcription to Clipboard"
+                      icon={Icon.Clipboard}
+                      onAction={() => handleCopyTranscript(file)}
+                    />
+                  ) : null}
+                  <MenuBarExtra.Item title="Delete Recording" icon={Icon.Trash} onAction={() => handleDelete(file)} />
+                </MenuBarExtra.Submenu>
+              ))}
+            </MenuBarExtra.Section>
+          ) : null}
+          {unpinnedFiles.length > 0 ? (
+            <MenuBarExtra.Section title="Recordings">
+              {unpinnedFiles.map((file) => (
+                <MenuBarExtra.Submenu key={file.path} title={file.title} icon={{ fileIcon: file.path }}>
+                  <MenuBarExtra.Item title="Open Recording" icon={Icon.Finder} onAction={() => open(file.path)} />
+                  <MenuBarExtra.Item title="Pin Recording" icon={Icon.Pin} onAction={() => handleTogglePin(file)} />
+                  {file.hasTranscript ? (
+                    <MenuBarExtra.Item
+                      title="Open Transcription in TextEdit"
+                      icon={Icon.Text}
+                      onAction={() => handleOpenTranscript(file)}
+                    />
+                  ) : null}
+                  {file.hasTranscript ? (
+                    <MenuBarExtra.Item
+                      title="Retranscribe Recording"
+                      icon={Icon.Wand}
+                      onAction={() => handleRetranscribe(file)}
+                    />
+                  ) : (
+                    <MenuBarExtra.Item
+                      title="Transcribe Recording"
+                      icon={Icon.Wand}
+                      onAction={() => handleRetranscribe(file)}
+                    />
+                  )}
+                  {file.hasTranscript ? (
+                    <MenuBarExtra.Item
+                      title="Delete Transcription"
+                      icon={Icon.QuoteBlock}
+                      onAction={() => handleDeleteTranscript(file)}
+                    />
+                  ) : null}
+                  {file.hasTranscript ? (
+                    <MenuBarExtra.Item
+                      title="Copy Transcription to Clipboard"
+                      icon={Icon.Clipboard}
+                      onAction={() => handleCopyTranscript(file)}
+                    />
+                  ) : null}
+                  <MenuBarExtra.Item title="Delete Recording" icon={Icon.Trash} onAction={() => handleDelete(file)} />
+                </MenuBarExtra.Submenu>
+              ))}
+            </MenuBarExtra.Section>
+          ) : null}
+        </>
+      )}
     </MenuBarExtra>
   );
 }
