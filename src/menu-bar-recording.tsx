@@ -8,7 +8,6 @@ import {
   stopRecording,
   listRecordings,
   RecordingFile,
-  transcribeRecording,
   deleteTranscript,
   deleteRecordingMetadata,
   openTranscriptInTextEdit,
@@ -118,31 +117,6 @@ export default function Command() {
     }
   }
 
-  async function handleRetranscribe(file: RecordingFile) {
-    await deleteTranscript(file.title);
-
-    await showToast({
-      style: Toast.Style.Animated,
-      title: "Transcribing recording",
-      message: "This may take a few minutes",
-    });
-
-    try {
-      await transcribeRecording(file.path);
-      await showToast({
-        style: Toast.Style.Success,
-        title: "Transcription complete",
-      });
-      await loadFiles();
-    } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to transcribe recording",
-        message: String(error),
-      });
-    }
-  }
-
   async function handleDeleteTranscript(file: RecordingFile) {
     try {
       await deleteTranscript(file.title);
@@ -236,19 +210,6 @@ export default function Command() {
                   ) : null}
                   {file.hasTranscript ? (
                     <MenuBarExtra.Item
-                      title="Retranscribe Recording"
-                      icon={Icon.Wand}
-                      onAction={() => handleRetranscribe(file)}
-                    />
-                  ) : (
-                    <MenuBarExtra.Item
-                      title="Transcribe Recording"
-                      icon={Icon.Wand}
-                      onAction={() => handleRetranscribe(file)}
-                    />
-                  )}
-                  {file.hasTranscript ? (
-                    <MenuBarExtra.Item
                       title="Delete Transcription"
                       icon={Icon.QuoteBlock}
                       onAction={() => handleDeleteTranscript(file)}
@@ -279,19 +240,6 @@ export default function Command() {
                       onAction={() => handleOpenTranscript(file)}
                     />
                   ) : null}
-                  {file.hasTranscript ? (
-                    <MenuBarExtra.Item
-                      title="Retranscribe Recording"
-                      icon={Icon.Wand}
-                      onAction={() => handleRetranscribe(file)}
-                    />
-                  ) : (
-                    <MenuBarExtra.Item
-                      title="Transcribe Recording"
-                      icon={Icon.Wand}
-                      onAction={() => handleRetranscribe(file)}
-                    />
-                  )}
                   {file.hasTranscript ? (
                     <MenuBarExtra.Item
                       title="Delete Transcription"
