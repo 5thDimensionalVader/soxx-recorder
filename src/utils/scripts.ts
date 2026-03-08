@@ -1,5 +1,6 @@
 import { getPreferenceValues, LocalStorage } from "@raycast/api";
 import { exec, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
@@ -30,6 +31,7 @@ export interface RecordingMetadata {
 }
 
 interface RecordingTranscriptProgress {
+  jobId: string;
   filename: string;
   transcript: string;
   completedChunks: number;
@@ -45,6 +47,7 @@ const TEMP_TRANSCRIPT_KEY_PREFIX = "recording_transcript_tmp_";
 const METADATA_KEY_PREFIX = "recording_metadata_";
 const TRANSCRIPTION_CHUNK_SECONDS = 1800;
 const TRANSCRIPTION_TEMP_DIR_PREFIX = "sox-recorder-transcribe-";
+const activeTranscriptions = new Set<string>();
 
 export async function checkCommand(command: string): Promise<string> {
   try {
@@ -167,8 +170,12 @@ function getTranscriptKey(filename: string): string {
   return `${TRANSCRIPT_KEY_PREFIX}${filename}`;
 }
 
-function getTempTranscriptKey(filename: string): string {
-  return `${TEMP_TRANSCRIPT_KEY_PREFIX}${filename}`;
+function getRecordingJobId(recordingPath: string): string {
+  return createHash("sha1").update(path.resolve(recordingPath)).digest("hex");
+}
+
+function getTempTranscriptKey(jobId: string): string {
+  return `${TEMP_TRANSCRIPT_KEY_PREFIX}${jobId}`;
 }
 
 function getWhisperModelPath(): string {
@@ -215,8 +222,12 @@ async function runCommand(command: string, args: string[]): Promise<{ stdout: st
   });
 }
 
-async function createTranscriptionTempDir(): Promise<string> {
-  return fs.promises.mkdtemp(path.join(os.tmpdir(), TRANSCRIPTION_TEMP_DIR_PREFIX));
+function combineTranscriptParts(transcriptParts: string[]): string {
+  return transcriptParts.filter(Boolean).join("\n\n");
+}
+
+async function createTranscriptionTempDir(jobId: string): Promise<string> {
+  return fs.promises.mkdtemp(path.join(os.tmpdir(), `${TRANSCRIPTION_TEMP_DIR_PREFIX}${jobId}-`));
 }
 
 async function cleanupTranscriptionTempDir(tempDir: string | null): Promise<void> {
@@ -263,11 +274,32 @@ async function segmentRecordingToWavChunks(recordingPath: string, tempDir: strin
 }
 
 async function saveTranscriptProgress(progress: RecordingTranscriptProgress): Promise<void> {
-  await LocalStorage.setItem(getTempTranscriptKey(progress.filename), JSON.stringify(progress));
+  await LocalStorage.setItem(getTempTranscriptKey(progress.jobId), JSON.stringify(progress));
 }
 
-async function clearTranscriptProgress(filename: string): Promise<void> {
-  await LocalStorage.removeItem(getTempTranscriptKey(filename));
+async function clearTranscriptProgress(jobId: string): Promise<void> {
+  await LocalStorage.removeItem(getTempTranscriptKey(jobId));
+}
+
+async function clearTranscriptProgressForFilename(filename: string): Promise<void> {
+  const items = await LocalStorage.allItems();
+
+  await Promise.all(
+    Object.entries(items)
+      .filter(([key]) => key.startsWith(TEMP_TRANSCRIPT_KEY_PREFIX))
+      .map(async ([key, value]) => {
+        if (typeof value !== "string") return;
+
+        try {
+          const progress = JSON.parse(value) as RecordingTranscriptProgress;
+          if (progress.filename === filename) {
+            await LocalStorage.removeItem(key);
+          }
+        } catch {
+          await LocalStorage.removeItem(key);
+        }
+      }),
+  );
 }
 
 async function transcribeChunk(whisperPath: string, modelPath: string, chunkPath: string): Promise<string> {
@@ -276,26 +308,33 @@ async function transcribeChunk(whisperPath: string, modelPath: string, chunkPath
 }
 
 export async function transcribeRecording(recordingPath: string): Promise<RecordingTranscript> {
-  const whisperPath = await checkCommand("/opt/homebrew/bin/whisper-cli");
-  const modelPath = getWhisperModelPath();
   const filename = path.basename(recordingPath);
+  const jobId = getRecordingJobId(recordingPath);
   let tempDir: string | null = null;
 
+  if (activeTranscriptions.has(jobId)) {
+    throw new Error(`Recording is already being transcribed: ${filename}`);
+  }
+
+  activeTranscriptions.add(jobId);
+
   try {
-    tempDir = await createTranscriptionTempDir();
+    const whisperPath = await checkCommand("/opt/homebrew/bin/whisper-cli");
+    const modelPath = getWhisperModelPath();
+
+    tempDir = await createTranscriptionTempDir(jobId);
     const chunkPaths = await segmentRecordingToWavChunks(recordingPath, tempDir);
-    const transcriptParts: string[] = [];
+    const transcriptParts = Array<string>(chunkPaths.length).fill("");
 
     for (const [index, chunkPath] of chunkPaths.entries()) {
       const chunkTranscript = await transcribeChunk(whisperPath, modelPath, chunkPath);
 
-      if (chunkTranscript) {
-        transcriptParts.push(chunkTranscript);
-      }
+      transcriptParts[index] = chunkTranscript;
 
       await saveTranscriptProgress({
+        jobId,
         filename,
-        transcript: transcriptParts.join("\n\n"),
+        transcript: combineTranscriptParts(transcriptParts),
         completedChunks: index + 1,
         totalChunks: chunkPaths.length,
         updatedAt: new Date().toISOString(),
@@ -304,18 +343,19 @@ export async function transcribeRecording(recordingPath: string): Promise<Record
 
     const transcriptData: RecordingTranscript = {
       filename,
-      transcript: transcriptParts.join("\n\n"),
+      transcript: combineTranscriptParts(transcriptParts),
       createdAt: new Date().toISOString(),
     };
 
     await LocalStorage.setItem(getTranscriptKey(filename), JSON.stringify(transcriptData));
-    await clearTranscriptProgress(filename);
+    await clearTranscriptProgress(jobId);
 
     return transcriptData;
   } catch (error) {
     throw new Error(`Failed to transcribe recording: ${error}`);
   } finally {
-    await clearTranscriptProgress(filename);
+    activeTranscriptions.delete(jobId);
+    await clearTranscriptProgress(jobId);
     await cleanupTranscriptionTempDir(tempDir);
   }
 }
@@ -392,7 +432,7 @@ export async function copyTranscriptToClipboard(filename: string): Promise<void>
 
 export async function deleteTranscript(filename: string): Promise<void> {
   await LocalStorage.removeItem(getTranscriptKey(filename));
-  await clearTranscriptProgress(filename);
+  await clearTranscriptProgressForFilename(filename);
 }
 
 export async function deleteRecordingMetadata(filename: string): Promise<void> {
