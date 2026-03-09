@@ -8,7 +8,6 @@ import {
   stopRecording,
   listRecordings,
   RecordingFile,
-  transcribeRecording,
   deleteTranscript,
   deleteRecordingMetadata,
   openTranscriptInTextEdit,
@@ -26,9 +25,7 @@ export default function Command() {
   const loadFiles = useCallback(async () => {
     setIsLoading(true);
     try {
-      let recordings = await listRecordings();
-      const cutoffDate = subDays(new Date(), 7);
-      recordings = recordings.filter((recording) => recording.createdAt >= cutoffDate);
+      const recordings = await listRecordings();
       setFiles(recordings);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -56,8 +53,9 @@ export default function Command() {
   }, [loadFiles]);
 
   const { pinnedFiles, unpinnedFiles } = useMemo(() => {
+    const cutoffDate = subDays(new Date(), 7);
     const pinned = files.filter((file) => file.isPinned);
-    const unpinned = files.filter((file) => !file.isPinned);
+    const unpinned = files.filter((file) => !file.isPinned && file.createdAt >= cutoffDate);
     const sortByDate = (a: RecordingFile, b: RecordingFile) => b.createdAt.getTime() - a.createdAt.getTime();
     return {
       pinnedFiles: [...pinned].sort(sortByDate),
@@ -116,31 +114,6 @@ export default function Command() {
           message: String(error),
         });
       }
-    }
-  }
-
-  async function handleRetranscribe(file: RecordingFile) {
-    await deleteTranscript(file.title);
-
-    await showToast({
-      style: Toast.Style.Animated,
-      title: "Transcribing recording",
-      message: "This may take a few minutes",
-    });
-
-    try {
-      await transcribeRecording(file.path);
-      await showToast({
-        style: Toast.Style.Success,
-        title: "Transcription complete",
-      });
-      await loadFiles();
-    } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to transcribe recording",
-        message: String(error),
-      });
     }
   }
 
@@ -237,19 +210,6 @@ export default function Command() {
                   ) : null}
                   {file.hasTranscript ? (
                     <MenuBarExtra.Item
-                      title="Retranscribe Recording"
-                      icon={Icon.Wand}
-                      onAction={() => handleRetranscribe(file)}
-                    />
-                  ) : (
-                    <MenuBarExtra.Item
-                      title="Transcribe Recording"
-                      icon={Icon.Wand}
-                      onAction={() => handleRetranscribe(file)}
-                    />
-                  )}
-                  {file.hasTranscript ? (
-                    <MenuBarExtra.Item
                       title="Delete Transcription"
                       icon={Icon.QuoteBlock}
                       onAction={() => handleDeleteTranscript(file)}
@@ -280,19 +240,6 @@ export default function Command() {
                       onAction={() => handleOpenTranscript(file)}
                     />
                   ) : null}
-                  {file.hasTranscript ? (
-                    <MenuBarExtra.Item
-                      title="Retranscribe Recording"
-                      icon={Icon.Wand}
-                      onAction={() => handleRetranscribe(file)}
-                    />
-                  ) : (
-                    <MenuBarExtra.Item
-                      title="Transcribe Recording"
-                      icon={Icon.Wand}
-                      onAction={() => handleRetranscribe(file)}
-                    />
-                  )}
                   {file.hasTranscript ? (
                     <MenuBarExtra.Item
                       title="Delete Transcription"
