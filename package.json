@@ -36,6 +36,78 @@
       "mode": "menu-bar"
     }
   ],
+  "tools": [
+    {
+      "name": "search-transcript",
+      "title": "Search Transcript",
+      "description": "Retrieve the transcript for a recording by filename, for example recording_2026-03-05.mp3."
+    }
+  ],
+  "ai": {
+    "instructions": "Use the search-transcript tool when the user asks about what was said in a recording or asks for a transcript. The tool expects a filename. Recordings created by this extension follow the filename pattern recording_YYYY-MM-DD.mp3, so if the user refers to a recording by date, convert that date into the matching filename before calling the tool.",
+    "evals": [
+      {
+        "input": "@sox-recorder what was discussed in the recording on 2026-03-05?",
+        "mocks": {
+          "search-transcript": {
+            "filename": "recording_2026-03-05.mp3",
+            "transcript": "We discussed launch readiness, the onboarding checklist, and a follow-up meeting for next Tuesday.",
+            "createdAt": "2026-03-05T14:30:00.000Z"
+          }
+        },
+        "expected": [
+          {
+            "callsTool": {
+              "name": "search-transcript",
+              "arguments": {
+                "filename": "recording_2026-03-05.mp3"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "input": "@sox-recorder show me the transcript for recording_2026-03-05.mp3",
+        "mocks": {
+          "search-transcript": {
+            "filename": "recording_2026-03-05.mp3",
+            "transcript": "We discussed launch readiness, the onboarding checklist, and a follow-up meeting for next Tuesday.",
+            "createdAt": "2026-03-05T14:30:00.000Z"
+          }
+        },
+        "expected": [
+          {
+            "callsTool": {
+              "name": "search-transcript",
+              "arguments": {
+                "filename": "recording_2026-03-05.mp3"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "input": "@sox-recorder what did we say in the March 5, 2026 recording?",
+        "mocks": {
+          "search-transcript": {
+            "filename": "recording_2026-03-05.mp3",
+            "transcript": "We discussed launch readiness, the onboarding checklist, and a follow-up meeting for next Tuesday.",
+            "createdAt": "2026-03-05T14:30:00.000Z"
+          }
+        },
+        "expected": [
+          {
+            "callsTool": {
+              "name": "search-transcript",
+              "arguments": {
+                "filename": "recording_2026-03-05.mp3"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
   "preferences": [
     {
       "name": "recordingsDirectory",
